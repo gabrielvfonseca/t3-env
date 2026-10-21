@@ -304,7 +304,7 @@ export type CreateEnv<
  * used when the env is passed to `extends`.
  * @internal
  */
-const envSources = new WeakMap<object, { values: object; publicKeys: Set<string> }>();
+const envSources = new WeakMap<object, { values: Record<string, unknown>; publicKeys: Set<string> }>();
 
 /**
  * Create a new environment variable schema.
@@ -330,32 +330,31 @@ export function createEnv<
     }
   }
 
-  // Read the raw values of extended envs so the client access guard of a preset
-  // doesn't fire while merging it. Its shared variables stay readable here.
-  const extendedObj = (opts.extends ?? []).reduce((acc, curr) => {
-    return Object.assign(acc, envSources.get(curr)?.values ?? curr);
-  }, {});
-  const extendedPublicKeys = (opts.extends ?? []).flatMap((curr) => {
-    const source = envSources.get(curr);
-    return source ? [...source.publicKeys] : Object.keys(curr);
-  });
-
   const skip = !!opts.skipValidation;
-  if (skip) {
-    if (opts.extends) {
-      for (const preset of opts.extends) {
-        preset.skipValidation = true;
-      }
+  if (skip && opts.extends) {
+    for (const preset of opts.extends) {
+      preset.skipValidation = true;
     }
-
-    // biome-ignore lint/suspicious/noExplicitAny: <explanation>
-    return Object.assign(extendedObj, runtimeEnv) as any;
   }
 
   const _client = typeof opts.client === "object" ? opts.client : {};
   const _server = typeof opts.server === "object" ? opts.server : {};
   const _shared = typeof opts.shared === "object" ? opts.shared : {};
   const isServer = opts.isServer ?? (typeof window === "undefined" || "Deno" in window);
+
+  // Values of the extended envs. On the client only their public keys are kept, so server-only
+  // values never end up in an object that isn't guarded by the access proxy. Envs not created by
+  // `createEnv` can't be classified, so they contribute nothing on the client.
+  const extendedObj = (opts.extends ?? []).reduce<Record<string, unknown>>((acc, curr) => {
+    const source = envSources.get(curr);
+    if (!source) return Object.assign(acc, isServer ? curr : {});
+    if (isServer) return Object.assign(acc, source.values);
+    for (const key of source.publicKeys) acc[key] = source.values[key];
+    return acc;
+  }, {});
+  const extendedPublicKeys = (opts.extends ?? []).flatMap((curr) => {
+    return [...(envSources.get(curr)?.publicKeys ?? [])];
+  });
 
   const finalSchemaShape = isServer
     ? {
@@ -369,6 +368,25 @@ export function createEnv<
       };
 
   const finalSchema = opts.createFinalSchema?.(finalSchemaShape as never, isServer);
+
+  if (skip) {
+    // Best effort: apply schema defaults and transforms when the values are valid,
+    // and fall back to the raw values otherwise. Never throws.
+    let values: object = runtimeEnv;
+    try {
+      const skipped =
+        finalSchema?.["~standard"].validate(runtimeEnv) ??
+        parseWithDictionary(finalSchemaShape, runtimeEnv);
+      ensureSynchronous(skipped, "Validation must be synchronous");
+      if (!skipped.issues) values = skipped.value;
+    } catch {
+      // Keep the raw values
+    }
+
+    // biome-ignore lint/suspicious/noExplicitAny: <explanation>
+    return Object.assign(extendedObj, runtimeEnv, values) as any;
+  }
+
   const parsed =
     finalSchema?.["~standard"].validate(runtimeEnv) ??
     parseWithDictionary(finalSchemaShape, runtimeEnv);

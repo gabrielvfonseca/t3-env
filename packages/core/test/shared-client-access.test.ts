@@ -79,4 +79,41 @@ describe("shared variables on the client", () => {
 
     expect(siteEnv.PUBLIC_URL).toBe("https://example.com");
   });
+
+  test("skipValidation on the client doesn't expose server-only values of a preset", () => {
+    const common = createEnv({
+      clientPrefix: undefined,
+      server: { SECRET: z.string() },
+      client: {},
+      runtimeEnv: { SECRET: "hunter2" },
+      isServer: true,
+    });
+
+    const siteEnv = createEnv({
+      clientPrefix: undefined,
+      extends: [common],
+      server: {},
+      client: {},
+      runtimeEnv: {},
+      skipValidation: true,
+      isServer: false,
+    });
+
+    expect((siteEnv as Record<string, unknown>).SECRET).toBeUndefined();
+  });
+
+  test("envs not created by createEnv stay hidden on the client", () => {
+    const plainPreset = { SECRET: "hunter2" };
+
+    const siteEnv = createEnv({
+      clientPrefix: undefined,
+      extends: [plainPreset],
+      server: {},
+      client: {},
+      runtimeEnv: {},
+      isServer: false,
+    });
+
+    expect(() => (siteEnv as Record<string, unknown>).SECRET).toThrow();
+  });
 });
