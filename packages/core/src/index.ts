@@ -130,6 +130,13 @@ export interface BaseOptions<
    * explicitly specify this option as true.
    */
   emptyStringAsUndefined?: boolean;
+
+  /**
+   * Whether to log a warning for each optional variable that isn't set and has no default.
+   * Useful to catch variables forgotten in a deployment, such as a missing `docker-compose` entry.
+   * @default false
+   */
+  warnAbsentOptional?: boolean;
 }
 
 /**
@@ -412,6 +419,17 @@ export function createEnv<
 
   // Shared variables, including those inherited through `extends`, are readable on the client
   const sharedKeys = new Set([...Object.keys(_shared), ...extendedPublicKeys]);
+  if (opts.warnAbsentOptional) {
+    for (const [key, schema] of Object.entries(finalSchemaShape as StandardSchemaDictionary)) {
+      if (runtimeEnv[key] !== undefined) continue;
+      // A variable is optional when it validates without a value and has no default
+      const result = schema["~standard"].validate(undefined);
+      if (!(result instanceof Promise) && !result.issues && result.value === undefined) {
+        console.warn(`⚠️ Optional environment variable ${key} is not set`);
+      }
+    }
+  }
+
   const isServerAccess = (prop: string) => {
     if (sharedKeys.has(prop)) return false;
     if (!opts.clientPrefix) return true;
