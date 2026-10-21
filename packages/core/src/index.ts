@@ -341,15 +341,10 @@ export function createEnv<
   });
 
   const skip = !!opts.skipValidation;
-  if (skip) {
-    if (opts.extends) {
-      for (const preset of opts.extends) {
-        preset.skipValidation = true;
-      }
+  if (skip && opts.extends) {
+    for (const preset of opts.extends) {
+      preset.skipValidation = true;
     }
-
-    // biome-ignore lint/suspicious/noExplicitAny: <explanation>
-    return Object.assign(extendedObj, runtimeEnv) as any;
   }
 
   const _client = typeof opts.client === "object" ? opts.client : {};
@@ -369,6 +364,25 @@ export function createEnv<
       };
 
   const finalSchema = opts.createFinalSchema?.(finalSchemaShape as never, isServer);
+
+  if (skip) {
+    // Best effort: apply schema defaults and transforms when the values are valid,
+    // and fall back to the raw values otherwise. Never throws.
+    let values: object = runtimeEnv;
+    try {
+      const skipped =
+        finalSchema?.["~standard"].validate(runtimeEnv) ??
+        parseWithDictionary(finalSchemaShape, runtimeEnv);
+      ensureSynchronous(skipped, "Validation must be synchronous");
+      if (!skipped.issues) values = skipped.value;
+    } catch {
+      // Keep the raw values
+    }
+
+    // biome-ignore lint/suspicious/noExplicitAny: <explanation>
+    return Object.assign(extendedObj, runtimeEnv, values) as any;
+  }
+
   const parsed =
     finalSchema?.["~standard"].validate(runtimeEnv) ??
     parseWithDictionary(finalSchemaShape, runtimeEnv);
